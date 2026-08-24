@@ -146,17 +146,59 @@ fi
 aws cloudtrail describe-trails \
   --region $REGION --output json > "$OUTDIR/cloudtrail-trails.json"
 
-while IFS=$'\t' read -r trail_arn home_region; do
+CT_HEALTH_JSONL="$OUTDIR/.cloudtrail-health-entries.jsonl"
+> "$CT_HEALTH_JSONL"
+
+while IFS=$'\t' read -r trail_arn home_region bucket_name log_validation; do
   [ -z "$trail_arn" ] && continue
   trail_short=$(basename "$trail_arn")
+  status_file="$OUTDIR/cloudtrail-status-${trail_short}.json"
+
   aws cloudtrail get-trail-status \
     --name "$trail_arn" \
-    --region "$home_region" --output json > "$OUTDIR/cloudtrail-status-${trail_short}.json"
+    --region "$home_region" --output json > "$status_file"
 
   aws cloudtrail get-event-selectors \
     --trail-name "$trail_arn" \
     --region "$home_region" --output json > "$OUTDIR/cloudtrail-event-selectors-${trail_short}.json"
-done < <(aws cloudtrail describe-trails --region $REGION --output text --query 'trailList[].[TrailARN,HomeRegion]')
+
+  # Can the AUDITOR's own identity reach the trail's destination bucket at all?
+  # This is separate from LatestDeliveryError below, which is whether CloudTrail's
+  # own service-linked delivery can reach it — the two can fail independently.
+  BUCKET_CHECK="OK"
+  if [ -n "$bucket_name" ] && [ "$bucket_name" != "None" ]; then
+    if ! aws s3api head-bucket --bucket "$bucket_name" --region "$home_region" \
+      2>"$OUTDIR/cloudtrail-bucket-check-${trail_short}.log"; then
+      BUCKET_CHECK="INACCESSIBLE_TO_AUDITOR"
+    fi
+  else
+    BUCKET_CHECK="NO_BUCKET_CONFIGURED"
+  fi
+
+  if [ -s "$status_file" ]; then
+    jq --arg trail "$trail_short" --arg bucket "$bucket_name" \
+       --arg bucketcheck "$BUCKET_CHECK" --arg logval "$log_validation" '{
+      Trail: $trail,
+      S3Bucket: $bucket,
+      LogFileValidationEnabled: $logval,
+      BucketReachableByAuditor: $bucketcheck,
+      IsLogging: (.IsLogging // false),
+      LatestDeliveryError: (.LatestDeliveryError // "None"),
+      LatestDeliveryTime: (.LatestDeliveryTime // "N/A"),
+      LatestNotificationError: (.LatestNotificationError // "None"),
+      LatestCloudWatchLogsDeliveryError: (.LatestCloudWatchLogsDeliveryError // "None"),
+      LatestDigestDeliveryError: (.LatestDigestDeliveryError // "None"),
+      StartLoggingTime: (.StartLoggingTime // "N/A"),
+      StopLoggingTime: (.StopLoggingTime // "N/A")
+    }' "$status_file" >> "$CT_HEALTH_JSONL"
+  fi
+done < <(aws cloudtrail describe-trails --region $REGION --output text \
+  --query 'trailList[].[TrailARN,HomeRegion,S3BucketName,LogFileValidationEnabled]')
+
+if [ -s "$CT_HEALTH_JSONL" ]; then
+  jq -s '.' "$CT_HEALTH_JSONL" > "$OUTDIR/cloudtrail-health.json"
+fi
+rm -f "$CT_HEALTH_JSONL"
 
 # ---------- Trusted Advisor ----------
 aws support describe-trusted-advisor-checks \
@@ -310,6 +352,32 @@ jq -r '.findings[]? | [
   "S3",(.title // "N/A"),(.description // "N/A"),
   (if .archived then "ARCHIVED" else "ACTIVE" end),(.region // "N/A"),(.updatedAt // "N/A")
 ] | @csv' "$OUTDIR/macie-findings.json" >> "$MASTER_CSV" 2>/dev/null
+
+if [ -s "$OUTDIR/cloudtrail-health.json" ]; then
+  jq -r '.[]? | select(
+      (.IsLogging == false) or
+      (.LatestDeliveryError != "None") or
+      (.LatestNotificationError != "None") or
+      (.LatestCloudWatchLogsDeliveryError != "None") or
+      (.LatestDigestDeliveryError != "None") or
+      (.BucketReachableByAuditor != "OK")
+    ) | [
+      "CloudTrail",
+      (if .IsLogging == false then "CRITICAL" else "HIGH" end),
+      .Trail,"Trail",
+      ("CloudTrail issue: " + .Trail),
+      ("IsLogging=" + (.IsLogging|tostring)
+        + "; DeliveryError=" + .LatestDeliveryError
+        + "; NotificationError=" + .LatestNotificationError
+        + "; CloudWatchLogsError=" + .LatestCloudWatchLogsDeliveryError
+        + "; DigestError=" + .LatestDigestDeliveryError
+        + "; BucketReachableByAuditor=" + .BucketReachableByAuditor
+        + "; S3Bucket=" + .S3Bucket),
+      (if .IsLogging == false then "NOT_LOGGING" else "DEGRADED" end),
+      "N/A",
+      (.LatestDeliveryTime // "N/A")
+    ] | @csv' "$OUTDIR/cloudtrail-health.json" >> "$MASTER_CSV" 2>/dev/null
+fi
 
 echo "Master findings CSV: $MASTER_CSV"
 

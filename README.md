@@ -123,16 +123,30 @@ Detective (Investigations), Macie.
 One tab per service — `SecurityHub`, `Config`, `Inspector`, `GuardDuty`,
 `AccessAnalyzer`, `Detective`, `Macie`, `SSM_PatchStates`,
 `EC2_SSM_Coverage`, `SecurityGroups`, `FlowLogs`, `ACM_Certificates`,
-`SecretsManager`, `RDS`, `OrgSCPs`, `IAM_CredReport`, `TrustedAdvisor` — each
-tab only appears if that service actually returned data (an empty result
-isn't a bug, it just means nothing to show).
+`SecretsManager`, `RDS`, `CloudTrail_Health`, `OrgSCPs`, `IAM_CredReport`,
+`TrustedAdvisor` — each tab only appears if that service actually returned
+data (an empty result isn't a bug, it just means nothing to show).
+
+### `cloudtrail-health.json`
+One object per CloudTrail trail, covering logging/delivery health beyond
+just "does the trail exist": `IsLogging`, `S3Bucket`,
+`BucketReachableByAuditor` (can *this script's own AWS identity* reach the
+trail's destination bucket via `head-bucket` — separate from whether
+CloudTrail's own service-linked delivery can reach it), `LogFileValidationEnabled`,
+`LatestDeliveryError`, `LatestDeliveryTime`, `LatestNotificationError`,
+`LatestCloudWatchLogsDeliveryError`, `LatestDigestDeliveryError`,
+`StartLoggingTime`, `StopLoggingTime`. Trails with `IsLogging: false` or any
+non-`"None"` error field, or a `BucketReachableByAuditor` other than `"OK"`,
+are also added to `master-findings.csv` as `CRITICAL` (not logging) or
+`HIGH` (degraded delivery/notification/bucket access) findings, and rolled
+into a "CloudTrail Issues" tile on the dashboard.
 
 ### `leadership-dashboard.html`
 A single self-contained page (no server, no internet needed to view it):
 KPI tiles (total findings, Critical, High, plus SSM coverage / open security
-groups / expiring certs if available), a findings-by-severity chart, a
-findings-by-source chart split by severity, and a searchable/sortable table
-of every finding.
+groups / expiring certs / CloudTrail issues if available), a
+findings-by-severity chart, a findings-by-source chart split by severity,
+and a searchable/sortable table of every finding.
 
 ---
 

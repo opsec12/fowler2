@@ -120,6 +120,26 @@ if os.path.isdir(outdir):
 if acm_expiring:
     extra_tiles.append(("Certs Expiring Soon", str(acm_expiring), "ACM certificates expiring within 60 days"))
 
+ct_health = read_json("cloudtrail-health.json")
+if ct_health:
+    ct_not_logging = 0
+    ct_degraded = 0
+    for t in ct_health:
+        if t.get("IsLogging") is False:
+            ct_not_logging += 1
+        elif (t.get("LatestDeliveryError", "None") != "None"
+              or t.get("LatestNotificationError", "None") != "None"
+              or t.get("LatestCloudWatchLogsDeliveryError", "None") != "None"
+              or t.get("LatestDigestDeliveryError", "None") != "None"
+              or t.get("BucketReachableByAuditor", "OK") != "OK"):
+            ct_degraded += 1
+    ct_issues = ct_not_logging + ct_degraded
+    if ct_issues:
+        extra_tiles.append((
+            "CloudTrail Issues", str(ct_issues),
+            "{} not logging, {} degraded (delivery/notification/bucket errors)".format(ct_not_logging, ct_degraded)
+        ))
+
 # ---------- SVG helpers ----------
 def esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))

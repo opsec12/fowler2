@@ -307,6 +307,29 @@ if data:
         ])
     add_sheet("RDS", ["DBInstanceIdentifier","Engine","StorageEncrypted","PubliclyAccessible","BackupRetentionDays","MultiAZ"], rows)
 
+# ---------- CloudTrail Health ----------
+data = load("cloudtrail-health.json")
+if data:
+    rows = []
+    for t in data:
+        rows.append([
+            t.get("Trail", "N/A"),
+            t.get("IsLogging", "N/A"),
+            t.get("S3Bucket", "N/A"),
+            t.get("BucketReachableByAuditor", "N/A"),
+            t.get("LogFileValidationEnabled", "N/A"),
+            t.get("LatestDeliveryError", "N/A"),
+            t.get("LatestDeliveryTime", "N/A"),
+            t.get("LatestNotificationError", "N/A"),
+            t.get("LatestCloudWatchLogsDeliveryError", "N/A"),
+            t.get("LatestDigestDeliveryError", "N/A"),
+            t.get("StartLoggingTime", "N/A"),
+            t.get("StopLoggingTime", "N/A"),
+        ])
+    add_sheet("CloudTrail_Health", ["Trail","IsLogging","S3Bucket","BucketReachableByAuditor",
+        "LogFileValidationEnabled","LatestDeliveryError","LatestDeliveryTime","LatestNotificationError",
+        "LatestCloudWatchLogsDeliveryError","LatestDigestDeliveryError","StartLoggingTime","StopLoggingTime"], rows)
+
 # ---------- Organizations SCPs ----------
 data = load("org-scps.json")
 if data:
