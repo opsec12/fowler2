@@ -13,6 +13,28 @@ echo "Running audit against region: $REGION"
 echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
 echo ""
 
+# ---------- Ensure companion scripts (workbook.py, dashboard.py) are present ----------
+# If this copy of audit.sh isn't already sitting next to workbook.py/dashboard.py,
+# pull them from the fowler repo instead of requiring you to download each file by hand.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$SCRIPT_DIR"
+
+if [ ! -f "$SCRIPT_DIR/workbook.py" ] || [ ! -f "$SCRIPT_DIR/dashboard.py" ]; then
+  echo "workbook.py/dashboard.py not found next to this script — fetching them from the fowler repo..."
+  if [ -d "$SCRIPT_DIR/fowler" ]; then
+    (cd "$SCRIPT_DIR/fowler" && git pull)
+  else
+    git clone https://github.com/opsec12/fowler.git "$SCRIPT_DIR/fowler"
+  fi
+  REPO_DIR="$SCRIPT_DIR/fowler"
+  echo ""
+  echo "NOTE: if fowler is a private repo and the clone above just hung waiting for a"
+  echo "username/password, either make the repo public on GitHub, or set up cached git"
+  echo "credentials (a Personal Access Token via a git credential helper) beforehand —"
+  echo "this step can't respond to an interactive password prompt on its own."
+  echo ""
+fi
+
 # ---------- Security Hub ----------
 aws securityhub get-findings \
   --filters '{"SeverityLabel":[{"Value":"CRITICAL","Comparison":"EQUALS"},{"Value":"HIGH","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}]}' \
@@ -266,22 +288,20 @@ aws iam get-credential-report --region $REGION --output text --query 'Content' \
 echo "IAM credential report CSV: $OUTDIR/iam-credential-report.csv"
 
 # ---------- Build the Excel workbook and leadership dashboard automatically ----------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ -f "$SCRIPT_DIR/workbook.py" ]; then
+if [ -f "$REPO_DIR/workbook.py" ]; then
   echo ""
   echo "Building Excel workbook..."
-  python3 "$SCRIPT_DIR/workbook.py" "$OUTDIR"
+  python3 "$REPO_DIR/workbook.py" "$OUTDIR"
 else
-  echo "workbook.py not found next to audit.sh — skipping .xlsx build."
+  echo "workbook.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping .xlsx build."
 fi
 
-if [ -f "$SCRIPT_DIR/dashboard.py" ]; then
+if [ -f "$REPO_DIR/dashboard.py" ]; then
   echo ""
   echo "Building leadership dashboard..."
-  python3 "$SCRIPT_DIR/dashboard.py" "$OUTDIR"
+  python3 "$REPO_DIR/dashboard.py" "$OUTDIR"
 else
-  echo "dashboard.py not found next to audit.sh — skipping HTML dashboard build."
+  echo "dashboard.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping HTML dashboard build."
 fi
 
 echo ""
