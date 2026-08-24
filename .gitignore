@@ -1,0 +1,6 @@
+# Audit output folders (contain live findings data — don't commit these)
+aws-audit-*/
+*.xlsx
+*.html
+__pycache__/
+*.pyc

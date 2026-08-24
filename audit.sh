@@ -1,0 +1,296 @@
+#!/bin/bash
+# AWS GovCloud Audit Data Pull + Master CSV + Workbook + Dashboard — run from CloudShell in us-gov-west-1
+# One-shot: pulls all AWS data, builds master-findings.csv, aws-audit.xlsx, and leadership-dashboard.html.
+
+# Region defaults to us-gov-west-1; override by passing a region as the first argument:
+#   ./audit.sh us-gov-east-1
+REGION="${1:-us-gov-west-1}"
+STAMP=$(date +%Y%m%d-%H%M%S)
+OUTDIR="aws-audit-${REGION}-${STAMP}"
+mkdir -p "$OUTDIR"
+
+echo "Running audit against region: $REGION"
+echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
+echo ""
+
+# ---------- Security Hub ----------
+aws securityhub get-findings \
+  --filters '{"SeverityLabel":[{"Value":"CRITICAL","Comparison":"EQUALS"},{"Value":"HIGH","Comparison":"EQUALS"}],"RecordState":[{"Value":"ACTIVE","Comparison":"EQUALS"}]}' \
+  --region $REGION --output json > "$OUTDIR/securityhub-findings.json"
+
+# ---------- AWS Config ----------
+aws configservice describe-config-rules \
+  --region $REGION --output json > "$OUTDIR/config-all-rules.json"
+
+aws configservice describe-conformance-packs \
+  --region $REGION --output json > "$OUTDIR/config-conformance-packs.json"
+
+aws configservice describe-compliance-by-config-rule \
+  --compliance-types NON_COMPLIANT \
+  --region $REGION --output json > "$OUTDIR/config-noncompliant-rules.json"
+
+for rule in $(aws configservice describe-compliance-by-config-rule \
+  --compliance-types NON_COMPLIANT --region $REGION \
+  --output text --query 'ComplianceByConfigRules[].ConfigRuleName'); do
+  aws configservice get-compliance-details-by-config-rule \
+    --config-rule-name "$rule" \
+    --compliance-types NON_COMPLIANT \
+    --region $REGION --output json > "$OUTDIR/config-detail-${rule}.json"
+done
+
+# ---------- Inspector ----------
+aws inspector2 list-findings \
+  --filter-criteria '{"findingStatus":[{"comparison":"EQUALS","value":"ACTIVE"}]}' \
+  --region $REGION --output json > "$OUTDIR/inspector-findings.json"
+
+aws inspector2 batch-get-account-status \
+  --region $REGION --output json > "$OUTDIR/inspector-enablement-status.json"
+
+# ---------- GuardDuty ----------
+DETECTOR_ID=$(aws guardduty list-detectors --region $REGION --output text --query 'DetectorIds[0]')
+
+if [ -z "$DETECTOR_ID" ] || [ "$DETECTOR_ID" = "None" ]; then
+  echo "No GuardDuty detector found in $REGION — skipping GuardDuty."
+else
+  aws guardduty list-findings \
+    --detector-id $DETECTOR_ID \
+    --finding-criteria '{"Criterion":{"severity":{"Gte":7}}}' \
+    --region $REGION --output json > "$OUTDIR/guardduty-finding-ids.json"
+
+  aws guardduty get-findings \
+    --detector-id $DETECTOR_ID \
+    --finding-ids $(aws guardduty list-findings --detector-id $DETECTOR_ID --region $REGION --output text --query 'FindingIds') \
+    --region $REGION --output json > "$OUTDIR/guardduty-findings.json"
+fi
+
+# ---------- IAM ----------
+aws iam generate-credential-report --region $REGION
+
+while true; do
+  STATUS=$(aws iam generate-credential-report --region $REGION --query 'State' --output text)
+  if [ "$STATUS" = "COMPLETE" ]; then
+    break
+  fi
+  echo "Credential report status: $STATUS — waiting..."
+  sleep 3
+done
+
+aws iam get-credential-report \
+  --region $REGION --output json > "$OUTDIR/iam-credential-report.json"
+
+ANALYZER_ARN=$(aws accessanalyzer list-analyzers --region $REGION --output text --query 'analyzers[0].arn')
+
+if [ -z "$ANALYZER_ARN" ] || [ "$ANALYZER_ARN" = "None" ]; then
+  echo "No Access Analyzer found in $REGION — skipping Access Analyzer."
+else
+  aws accessanalyzer list-findings \
+    --analyzer-arn $ANALYZER_ARN \
+    --filter '{"status":{"eq":["ACTIVE"]}}' \
+    --region $REGION --output json > "$OUTDIR/access-analyzer-findings.json"
+fi
+
+# ---------- CloudTrail ----------
+aws cloudtrail describe-trails \
+  --region $REGION --output json > "$OUTDIR/cloudtrail-trails.json"
+
+while IFS=$'\t' read -r trail_arn home_region; do
+  [ -z "$trail_arn" ] && continue
+  trail_short=$(basename "$trail_arn")
+  aws cloudtrail get-trail-status \
+    --name "$trail_arn" \
+    --region "$home_region" --output json > "$OUTDIR/cloudtrail-status-${trail_short}.json"
+
+  aws cloudtrail get-event-selectors \
+    --trail-name "$trail_arn" \
+    --region "$home_region" --output json > "$OUTDIR/cloudtrail-event-selectors-${trail_short}.json"
+done < <(aws cloudtrail describe-trails --region $REGION --output text --query 'trailList[].[TrailARN,HomeRegion]')
+
+# ---------- Trusted Advisor ----------
+aws support describe-trusted-advisor-checks \
+  --language en \
+  --region $REGION --output json > "$OUTDIR/trustedadvisor-checks-list.json"
+
+# ---------- S3 + KMS ----------
+aws s3control get-public-access-block \
+  --account-id $(aws sts get-caller-identity --region $REGION --output text --query 'Account') \
+  --region $REGION --output json > "$OUTDIR/s3-account-public-access-block.json"
+
+aws kms list-keys --region $REGION --output json > "$OUTDIR/kms-keys.json"
+
+# ---------- Amazon Detective: automated Investigations ----------
+GRAPH_ARN=$(aws detective list-graphs --region $REGION --output text --query 'GraphList[0].Arn')
+
+if [ -z "$GRAPH_ARN" ] || [ "$GRAPH_ARN" = "None" ]; then
+  echo "No Detective behavior graph found in $REGION — skipping Detective."
+else
+  aws detective list-investigations \
+    --graph-arn "$GRAPH_ARN" \
+    --region $REGION --output json > "$OUTDIR/detective-investigations.json"
+
+  for inv_id in $(jq -r '.InvestigationDetails[]?.InvestigationId' "$OUTDIR/detective-investigations.json"); do
+    aws detective get-investigation \
+      --graph-arn "$GRAPH_ARN" \
+      --investigation-id "$inv_id" \
+      --region $REGION --output json > "$OUTDIR/detective-investigation-${inv_id}.json"
+
+    aws detective list-indicators \
+      --graph-arn "$GRAPH_ARN" \
+      --investigation-id "$inv_id" \
+      --region $REGION --output json > "$OUTDIR/detective-indicators-${inv_id}.json"
+  done
+fi
+
+# ---------- Amazon Macie: sensitive data findings ----------
+MACIE_STATUS=$(aws macie2 get-macie-session --region $REGION --output text --query 'status' 2>/dev/null)
+
+if [ -z "$MACIE_STATUS" ] || [ "$MACIE_STATUS" != "ENABLED" ]; then
+  echo "Macie not enabled (or unavailable in this partition) in $REGION — skipping Macie."
+else
+  MACIE_FINDING_IDS=$(aws macie2 list-findings --region $REGION --output text --query 'findingIds')
+  if [ -n "$MACIE_FINDING_IDS" ]; then
+    aws macie2 get-findings \
+      --finding-ids $MACIE_FINDING_IDS \
+      --region $REGION --output json > "$OUTDIR/macie-findings.json"
+  else
+    echo "Macie enabled but returned zero findings."
+  fi
+fi
+
+# ---------- Systems Manager: patch compliance ----------
+aws ec2 describe-instances --region $REGION --output json > "$OUTDIR/ec2-instances.json"
+
+aws ssm describe-instance-information --region $REGION --output json > "$OUTDIR/ssm-managed-instances.json"
+
+mapfile -t SSM_INSTANCE_IDS < <(jq -r '.InstanceInformationList[].InstanceId' "$OUTDIR/ssm-managed-instances.json")
+
+if [ ${#SSM_INSTANCE_IDS[@]} -eq 0 ]; then
+  echo "No SSM-managed instances found in $REGION — skipping patch state pull."
+else
+  batch_num=0
+  for ((i=0; i<${#SSM_INSTANCE_IDS[@]}; i+=50)); do
+    batch=("${SSM_INSTANCE_IDS[@]:i:50}")
+    aws ssm describe-instance-patch-states \
+      --instance-ids "${batch[@]}" \
+      --region $REGION --output json > "$OUTDIR/ssm-patch-states-batch-${batch_num}.json"
+    batch_num=$((batch_num+1))
+  done
+fi
+
+# ---------- VPC: Security Groups + Flow Logs ----------
+aws ec2 describe-security-groups --region $REGION --output json > "$OUTDIR/ec2-security-groups.json"
+aws ec2 describe-flow-logs --region $REGION --output json > "$OUTDIR/ec2-flow-logs.json"
+
+# ---------- ACM: certificates ----------
+aws acm list-certificates --region $REGION --output json > "$OUTDIR/acm-certificates.json"
+
+for cert_arn in $(jq -r '.CertificateSummaryList[].CertificateArn' "$OUTDIR/acm-certificates.json"); do
+  cert_short=$(basename "$cert_arn")
+  aws acm describe-certificate \
+    --certificate-arn "$cert_arn" \
+    --region $REGION --output json > "$OUTDIR/acm-cert-detail-${cert_short}.json"
+done
+
+# ---------- Secrets Manager ----------
+aws secretsmanager list-secrets --region $REGION --output json > "$OUTDIR/secretsmanager-secrets.json"
+
+# ---------- RDS ----------
+aws rds describe-db-instances --region $REGION --output json > "$OUTDIR/rds-db-instances.json"
+
+# ---------- AWS Organizations: SCPs ----------
+aws organizations list-policies --filter SERVICE_CONTROL_POLICY \
+  --region $REGION --output json > "$OUTDIR/org-scps.json" 2>"$OUTDIR/org-scps-error.log"
+
+if [ ! -s "$OUTDIR/org-scps.json" ]; then
+  echo "Could not retrieve SCPs (not org management/delegated admin, or Organizations not in use) — see org-scps-error.log"
+fi
+
+# ---------- Master findings CSV ----------
+MASTER_CSV="$OUTDIR/master-findings.csv"
+echo "Source,Severity,ResourceId,ResourceType,Title,Description,Status,Region,Timestamp" > "$MASTER_CSV"
+
+jq -r '.Findings[]? | [
+  "SecurityHub",(.Severity.Label // "N/A"),((.Resources[0].Id) // "N/A"),((.Resources[0].Type) // "N/A"),
+  (.Title // "N/A"),(.Description // "N/A"),(.Compliance.Status // .RecordState // "N/A"),(.Region // "N/A"),(.UpdatedAt // "N/A")
+] | @csv' "$OUTDIR/securityhub-findings.json" >> "$MASTER_CSV"
+
+for f in "$OUTDIR"/config-detail-*.json; do
+  [ -e "$f" ] || continue
+  jq -r '.EvaluationResults[]? | [
+    "Config",.ComplianceType,.EvaluationResultIdentifier.EvaluationResultQualifier.ResourceId,
+    .EvaluationResultIdentifier.EvaluationResultQualifier.ResourceType,
+    .EvaluationResultIdentifier.EvaluationResultQualifier.ConfigRuleName,
+    (.Annotation // "N/A"),.ComplianceType,"N/A",.ResultRecordedTime
+  ] | @csv' "$f" >> "$MASTER_CSV"
+done
+
+jq -r '.findings[]? | [
+  "Inspector",.severity,((.resources[0].id) // "N/A"),((.resources[0].type) // "N/A"),
+  .title,(.description // "N/A"),.status,"N/A",.firstObservedAt
+] | @csv' "$OUTDIR/inspector-findings.json" >> "$MASTER_CSV"
+
+jq -r '.Findings[]? | [
+  "GuardDuty",.Severity,(.Id // "N/A"),(.Resource.ResourceType // "N/A"),.Title,(.Description // "N/A"),.Type,.Region,.UpdatedAt
+] | @csv' "$OUTDIR/guardduty-findings.json" >> "$MASTER_CSV" 2>/dev/null
+
+jq -r '.findings[]? | [
+  "AccessAnalyzer",(if .isPublic then "HIGH" else "MEDIUM" end),.resource,.resourceType,
+  ("Externally shared: " + .resourceType),(.condition // {} | tostring),.status,"N/A",.updatedAt
+] | @csv' "$OUTDIR/access-analyzer-findings.json" >> "$MASTER_CSV" 2>/dev/null
+
+for f in "$OUTDIR"/detective-investigation-*.json; do
+  [ -e "$f" ] || continue
+  inv_id=$(jq -r '.InvestigationId' "$f")
+  indicators_file="$OUTDIR/detective-indicators-${inv_id}.json"
+  related_count=0
+  if [ -e "$indicators_file" ]; then
+    related_count=$(jq '[.Indicators[]? | select(.IndicatorType=="RELATED_FINDING")] | length' "$indicators_file")
+  fi
+  jq -r --arg relcount "$related_count" '[
+    "Detective", .Severity, .EntityArn, .EntityType,
+    ("Investigation " + .InvestigationId), ("Related findings: " + $relcount), .Status, "N/A", .CreatedTime
+  ] | @csv' "$f" >> "$MASTER_CSV"
+done
+
+jq -r '.findings[]? | [
+  "Macie",(.severity.description // "N/A"),
+  ((.resourcesAffected.s3Object.key // .resourcesAffected.s3Bucket.name) // "N/A"),
+  "S3",(.title // "N/A"),(.description // "N/A"),
+  (if .archived then "ARCHIVED" else "ACTIVE" end),(.region // "N/A"),(.updatedAt // "N/A")
+] | @csv' "$OUTDIR/macie-findings.json" >> "$MASTER_CSV" 2>/dev/null
+
+echo "Master findings CSV: $MASTER_CSV"
+
+aws iam get-credential-report --region $REGION --output text --query 'Content' \
+  | base64 -d > "$OUTDIR/iam-credential-report.csv"
+
+echo "IAM credential report CSV: $OUTDIR/iam-credential-report.csv"
+
+# ---------- Build the Excel workbook and leadership dashboard automatically ----------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [ -f "$SCRIPT_DIR/workbook.py" ]; then
+  echo ""
+  echo "Building Excel workbook..."
+  python3 "$SCRIPT_DIR/workbook.py" "$OUTDIR"
+else
+  echo "workbook.py not found next to audit.sh — skipping .xlsx build."
+fi
+
+if [ -f "$SCRIPT_DIR/dashboard.py" ]; then
+  echo ""
+  echo "Building leadership dashboard..."
+  python3 "$SCRIPT_DIR/dashboard.py" "$OUTDIR"
+else
+  echo "dashboard.py not found next to audit.sh — skipping HTML dashboard build."
+fi
+
+echo ""
+echo "=================================================="
+echo "All done. Deliverables in: $OUTDIR"
+echo ""
+FULL_OUTDIR="$(cd "$OUTDIR" && pwd)"
+echo "Full paths (use these with CloudShell Actions -> Download file):"
+[ -f "$FULL_OUTDIR/master-findings.csv" ] && echo "  $FULL_OUTDIR/master-findings.csv"
+[ -f "$FULL_OUTDIR/aws-audit.xlsx" ] && echo "  $FULL_OUTDIR/aws-audit.xlsx"
+[ -f "$FULL_OUTDIR/leadership-dashboard.html" ] && echo "  $FULL_OUTDIR/leadership-dashboard.html"
+echo "=================================================="
