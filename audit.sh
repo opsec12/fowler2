@@ -2,15 +2,45 @@
 # AWS GovCloud Audit Data Pull + Master CSV + Workbook + Dashboard — run from CloudShell in us-gov-west-1
 # One-shot: pulls all AWS data, builds master-findings.csv, aws-audit.xlsx, and leadership-dashboard.html.
 
-# Region defaults to us-gov-west-1; override by passing a region as the first argument:
+# Pass a region as the first argument to skip the prompt, e.g.:
 #   ./audit.sh us-gov-east-1
-REGION="${1:-us-gov-west-1}"
+if [ -n "$1" ]; then
+  REGION="$1"
+else
+  echo "Which AWS region should this audit target?"
+  PS3="Enter a number: "
+  options=(
+    "us-gov-west-1 (AWS GovCloud West)"
+    "us-gov-east-1 (AWS GovCloud East)"
+    "us-east-1 (N. Virginia)"
+    "us-east-2 (Ohio)"
+    "us-west-1 (N. California)"
+    "us-west-2 (Oregon)"
+  )
+  select opt in "${options[@]}"; do
+    case $REPLY in
+      1) REGION="us-gov-west-1"; break ;;
+      2) REGION="us-gov-east-1"; break ;;
+      3) REGION="us-east-1"; break ;;
+      4) REGION="us-east-2"; break ;;
+      5) REGION="us-west-1"; break ;;
+      6) REGION="us-west-2"; break ;;
+      *) echo "Invalid choice — enter a number 1-6." ;;
+    esac
+  done
+fi
+
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUTDIR="aws-audit-${REGION}-${STAMP}"
 mkdir -p "$OUTDIR"
 
+echo ""
 echo "Running audit against region: $REGION"
-echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
+if [[ "$REGION" == us-gov-* ]]; then
+  echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
+else
+  echo "Note: AWS Organizations always routes to us-east-1 internally regardless of this setting."
+fi
 echo ""
 
 # ---------- Ensure companion scripts (workbook.py, dashboard.py) are present ----------
@@ -27,6 +57,7 @@ if [ ! -f "$SCRIPT_DIR/workbook.py" ] || [ ! -f "$SCRIPT_DIR/dashboard.py" ]; th
     git clone https://github.com/opsec12/fowler.git "$SCRIPT_DIR/fowler"
   fi
   REPO_DIR="$SCRIPT_DIR/fowler"
+  chmod +x "$REPO_DIR/audit.sh" 2>/dev/null
   echo ""
   echo "NOTE: if fowler is a private repo and the clone above just hung waiting for a"
   echo "username/password, either make the repo public on GitHub, or set up cached git"
