@@ -105,15 +105,20 @@ DETECTOR_ID=$(aws guardduty list-detectors --region $REGION --output text --quer
 if [ -z "$DETECTOR_ID" ] || [ "$DETECTOR_ID" = "None" ]; then
   echo "No GuardDuty detector found in $REGION — skipping GuardDuty."
 else
-  aws guardduty list-findings \
+  # Pull ALL findings (no severity filter) — the workbook/dashboard/CSV need
+  # every severity present to report accurately, not just High+.
+  GD_FINDING_IDS=$(aws guardduty list-findings \
     --detector-id $DETECTOR_ID \
-    --finding-criteria '{"Criterion":{"severity":{"Gte":7}}}' \
-    --region $REGION --output json > "$OUTDIR/guardduty-finding-ids.json"
+    --region $REGION --output text --query 'FindingIds')
 
-  aws guardduty get-findings \
-    --detector-id $DETECTOR_ID \
-    --finding-ids $(aws guardduty list-findings --detector-id $DETECTOR_ID --region $REGION --output text --query 'FindingIds') \
-    --region $REGION --output json > "$OUTDIR/guardduty-findings.json"
+  if [ -n "$GD_FINDING_IDS" ]; then
+    aws guardduty get-findings \
+      --detector-id $DETECTOR_ID \
+      --finding-ids $GD_FINDING_IDS \
+      --region $REGION --output json > "$OUTDIR/guardduty-findings.json"
+  else
+    echo "GuardDuty detector found but no findings currently exist in $REGION."
+  fi
 fi
 
 # ---------- IAM ----------
@@ -324,7 +329,9 @@ jq -r '.findings[]? | [
 ] | @csv' "$OUTDIR/inspector-findings.json" >> "$MASTER_CSV"
 
 jq -r '.Findings[]? | [
-  "GuardDuty",.Severity,(.Id // "N/A"),(.Resource.ResourceType // "N/A"),.Title,(.Description // "N/A"),.Type,.Region,.UpdatedAt
+  "GuardDuty",
+  (if .Severity >= 9 then "CRITICAL" elif .Severity >= 7 then "HIGH" elif .Severity >= 4 then "MEDIUM" else "LOW" end),
+  (.Id // "N/A"),(.Resource.ResourceType // "N/A"),.Title,(.Description // "N/A"),.Type,.Region,.UpdatedAt
 ] | @csv' "$OUTDIR/guardduty-findings.json" >> "$MASTER_CSV" 2>/dev/null
 
 jq -r '.findings[]? | [

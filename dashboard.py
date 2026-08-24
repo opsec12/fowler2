@@ -42,6 +42,24 @@ def norm_sev(raw):
         return "High"
     if s in ("MEDIUM", "MODERATE"):
         return "Medium"
+    # Safety net: some services (e.g. GuardDuty) report severity as a raw
+    # numeric score (1.0-10.0) rather than a string label. audit.sh converts
+    # GuardDuty's score to a label before writing master-findings.csv, but
+    # this catches any numeric value that slips through (old CSVs built
+    # before that fix, or a future service added the same way), using
+    # GuardDuty's own published bands: Critical 9.0-10.0, High 7.0-8.9,
+    # Medium 4.0-6.9, Low 1.0-3.9.
+    try:
+        score = float(s)
+        if score >= 9:
+            return "Critical"
+        if score >= 7:
+            return "High"
+        if score >= 4:
+            return "Medium"
+        return "Low"
+    except ValueError:
+        pass
     return "Low"  # LOW, INFORMATIONAL, NON_COMPLIANT, blank, etc.
 
 SEV_ORDER = ["Critical", "High", "Medium", "Low"]

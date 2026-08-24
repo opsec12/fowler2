@@ -89,10 +89,24 @@ if data:
 # ---------- GuardDuty ----------
 data = load("guardduty-findings.json")
 if data:
+    def gd_label(score):
+        try:
+            s = float(score)
+        except (TypeError, ValueError):
+            return "N/A"
+        if s >= 9:
+            return "CRITICAL"
+        if s >= 7:
+            return "HIGH"
+        if s >= 4:
+            return "MEDIUM"
+        return "LOW"
     rows = []
     for f in data.get("Findings", []):
+        raw_sev = f.get("Severity", "N/A")
         rows.append([
-            f.get("Severity", "N/A"),
+            gd_label(raw_sev),
+            raw_sev,
             f.get("Id", "N/A"),
             f.get("Resource", {}).get("ResourceType", "N/A"),
             f.get("Title", "N/A"),
@@ -101,7 +115,7 @@ if data:
             f.get("Region", "N/A"),
             f.get("UpdatedAt", "N/A"),
         ])
-    add_sheet("GuardDuty", ["Severity","Id","ResourceType","Title","Description","Type","Region","Timestamp"], rows)
+    add_sheet("GuardDuty", ["SeverityLabel","SeverityScore","Id","ResourceType","Title","Description","Type","Region","Timestamp"], rows)
 
 # ---------- Access Analyzer ----------
 data = load("access-analyzer-findings.json")
