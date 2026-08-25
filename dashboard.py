@@ -1,18 +1,19 @@
 # dashboard.py
-# Usage: python3 dashboard.py <OUTDIR> [ACCOUNT_ID]
+# Usage: python3 dashboard.py <OUTDIR> [ACCOUNT_ID] [REGION_LABEL]
 # Reads the flat findings CSV (+ a few optional JSON files, if present) from
-# OUTDIR and writes OUTDIR/<ACCOUNT_ID>_dashboard.html — one self-contained
-# file, no dependencies, no internet required. Open it in any browser.
-# ACCOUNT_ID (optional) names the output "<ACCOUNT_ID>_dashboard.html" and
-# is used to locate "<ACCOUNT_ID>_flat.csv" — useful when auditing many
-# accounts and sorting the results later. audit.sh always passes it
-# automatically.
+# OUTDIR and writes OUTDIR/<ACCOUNT_ID>_<REGION_LABEL>_dashboard.html — one
+# self-contained file, no dependencies, no internet required. Open it in any
+# browser. ACCOUNT_ID + REGION_LABEL (both optional) name the output and are
+# used to locate "<ACCOUNT_ID>_<REGION_LABEL>_flat.csv" — useful when
+# auditing many accounts/regions and sorting the results later. audit.sh
+# always passes both automatically.
 
 import csv, json, os, sys, datetime
 from collections import defaultdict, Counter
 
 outdir = sys.argv[1]
 account_id = sys.argv[2] if len(sys.argv) > 2 else None
+region_label = sys.argv[3] if len(sys.argv) > 3 else None
 
 if not os.path.isdir(outdir):
     print("Error: '{}' is not a folder.".format(outdir))
@@ -38,9 +39,11 @@ def read_json(fname):
             return None
 
 def find_findings_csv():
-    # Preferred: "<ACCOUNT_ID>_flat.csv" if we know the account id.
-    if account_id:
-        candidate = "{}_flat.csv".format(account_id)
+    # Preferred: "<ACCOUNT_ID>_<REGION_LABEL>_flat.csv" (or just one of the
+    # two, if that's all we were given).
+    name_parts = [p for p in (account_id, region_label) if p]
+    if name_parts:
+        candidate = "{}_flat.csv".format("_".join(name_parts))
         if os.path.exists(os.path.join(outdir, candidate)):
             return candidate
     # Fallback: any "*_flat.csv" sitting in the folder.
@@ -456,8 +459,8 @@ html_out = """<!doctype html>
 </body>
 </html>""".format(
     css=CSS,
-    account_title=(esc(account_id) if account_id else "Leadership Summary"),
-    account_heading=(" — Account {}".format(esc(account_id)) if account_id else ""),
+    account_title=(esc("_".join(p for p in (account_id, region_label) if p)) if (account_id or region_label) else "Leadership Summary"),
+    account_heading=(" — Account {}".format(esc(" / ".join(p for p in (account_id, region_label) if p))) if (account_id or region_label) else ""),
     generated=generated,
     total=total_findings,
     nsources=len(source_order),
@@ -469,7 +472,8 @@ html_out = """<!doctype html>
     script=SCRIPT,
 )
 
-html_name = "{}_dashboard.html".format(account_id) if account_id else "leadership-dashboard.html"
+name_parts = [p for p in (account_id, region_label) if p]
+html_name = "{}_dashboard.html".format("_".join(name_parts)) if name_parts else "leadership-dashboard.html"
 out_path = os.path.join(outdir, html_name)
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(html_out)
