@@ -5,9 +5,9 @@ account, and turn it into a spreadsheet and a visual dashboard for review.
 
 | File | What it does | Where it runs | Needs AWS access? |
 |---|---|---|---|
-| `audit.sh` | Pulls findings/inventory from AWS via the CLI, writes raw JSON + `<ACCOUNT_ID>_flat.csv` | AWS CloudShell (or anywhere with AWS CLI + credentials) | Yes |
-| `workbook.py` | Turns that JSON/CSV into a tabbed `<ACCOUNT_ID>_audit.xlsx` | Anywhere with Python 3 (CloudShell or your desktop) | No |
-| `dashboard.py` | Turns that JSON/CSV into a single-file `<ACCOUNT_ID>_dashboard.html` | Anywhere with Python 3 (CloudShell or your desktop) | No |
+| `audit.sh` | Pulls findings/inventory from AWS via the CLI, writes raw JSON + `<ACCOUNT_ID>_<REGION>_flat.csv` | AWS CloudShell (or anywhere with AWS CLI + credentials) | Yes |
+| `workbook.py` | Turns that JSON/CSV into a tabbed `<ACCOUNT_ID>_<REGION>_audit.xlsx` | Anywhere with Python 3 (CloudShell or your desktop) | No |
+| `dashboard.py` | Turns that JSON/CSV into a single-file `<ACCOUNT_ID>_<REGION>_dashboard.html` | Anywhere with Python 3 (CloudShell or your desktop) | No |
 
 `audit.sh` automatically runs `workbook.py` and `dashboard.py` for you at the
 end — see **Quick start** below. You only need to run them separately if
@@ -60,32 +60,39 @@ Setup below.
 ```
 
 This pulls all AWS data into a new folder named after the **account and
-region it just audited** (e.g. `aws-audit-123456789012-us-gov-west-1-20260824-171203/`
-— `audit.sh` looks up the account number itself via `aws sts
-get-caller-identity`, you don't need to know it ahead of time), builds the
-flat findings CSV, then automatically calls `workbook.py` and
-`dashboard.py` against that same folder. At the end it prints something
-like:
+region it just audited** (e.g.
+`aws-audit-123456789012-US-Gov-West-20260824-171203/` — `audit.sh` looks up
+the account number itself via `aws sts get-caller-identity`, you don't need
+to know it ahead of time), builds the flat findings CSV, then automatically
+calls `workbook.py` and `dashboard.py` against that same folder. At the end
+it prints something like:
 
 ```
 ==================================================
-All done. Account 123456789012 — deliverables in: aws-audit-123456789012-us-gov-west-1-20260824-171203
+All done. Account 123456789012 — deliverables in: aws-audit-123456789012-US-Gov-West-20260824-171203
 
 Full paths (use these with CloudShell Actions -> Download file):
-  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_flat.csv
-  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_audit.xlsx
-  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_dashboard.html
+  /home/cloudshell-user/aws-audit-123456789012-US-Gov-West-20260824-171203/123456789012_US-Gov-West_flat.csv
+  /home/cloudshell-user/aws-audit-123456789012-US-Gov-West-20260824-171203/123456789012_US-Gov-West_audit.xlsx
+  /home/cloudshell-user/aws-audit-123456789012-US-Gov-West-20260824-171203/123456789012_US-Gov-West_dashboard.html
 ==================================================
 ```
+
+`REGION` is translated into a friendly label for these names —
+`us-gov-west-1` → `US-Gov-West`, `us-gov-east-1` → `US-Gov-East`, and the
+four commercial regions become `US-East-1`, `US-East-2`, `US-West-1`,
+`US-West-2` — so files sort and read clearly without exposing the raw AWS
+region code.
 
 Every run creates a **new** timestamped folder — nothing gets overwritten,
 so you can re-run this on a schedule and keep a history. **If you're
 auditing many accounts**, this naming is what makes sorting them
-manageable: every deliverable is prefixed with the account number it came
-from, so you can drop all of them into one shared folder (Downloads,
-S3, a network share) and still tell them apart — `123456789012_flat.csv`,
-`123456789012_audit.xlsx`, `123456789012_dashboard.html`, one triplet per
-account, sorting naturally by account number.
+manageable: every deliverable is prefixed with the account number and
+region it came from, so you can drop all of them into one shared folder
+(Downloads, S3, a network share) and still tell them apart —
+`123456789012_US-Gov-West_flat.csv`, `123456789012_US-Gov-West_audit.xlsx`,
+`123456789012_US-Gov-West_dashboard.html`, one triplet per account/region,
+sorting naturally by account number.
 
 If `audit.sh` can't determine the account number (e.g. the credentials
 don't have `sts:GetCallerIdentity`), it falls back to `UNKNOWN-ACCOUNT` in
@@ -109,22 +116,25 @@ workbook or dashboard — both read from an existing output folder.
 
 **Rebuild just the Excel workbook:**
 ```bash
-python3 workbook.py aws-audit-123456789012-us-gov-west-1-20260824-171203 123456789012
+python3 workbook.py aws-audit-123456789012-US-Gov-West-20260824-171203 123456789012 US-Gov-West
 ```
 
 **Rebuild just the HTML dashboard:**
 ```bash
-python3 dashboard.py aws-audit-123456789012-us-gov-west-1-20260824-171203 123456789012
+python3 dashboard.py aws-audit-123456789012-US-Gov-West-20260824-171203 123456789012 US-Gov-West
 ```
 
-(swap in your actual folder name and account number — check with `ls -d
-aws-audit-*`). The trailing account number is optional for both scripts —
-without it, `workbook.py` names its output `aws-audit.xlsx` and
-`dashboard.py` falls back to looking for any `*_flat.csv` file in the
+(swap in your actual folder name, account number, and region label — check
+with `ls -d aws-audit-*`). The trailing account number and region label are
+both optional, and independent of each other, for both scripts — leave
+either or both off and `workbook.py`/`dashboard.py` just use whatever
+combination they were given to build the output name (falling back to
+`aws-audit.xlsx`/`leadership-dashboard.html` if neither is passed).
+`dashboard.py` also falls back to looking for any `*_flat.csv` file in the
 folder (or the legacy `master-findings.csv` name from older versions of
-`audit.sh`) and names its output `leadership-dashboard.html`. Passing the
-account number is what gives you the account-prefixed filenames described
-above.
+`audit.sh`) if it can't find a CSV matching the account/region it was
+given. Passing both is what gives you the fully account-and-region-prefixed
+filenames described above.
 
 Both scripts print a clear error and exit if you point them at something
 that isn't a real folder from `audit.sh` (e.g. accidentally pointing at the
@@ -134,7 +144,7 @@ that isn't a real folder from `audit.sh` (e.g. accidentally pointing at the
 
 ## What's inside each output
 
-### `<ACCOUNT_ID>_flat.csv`
+### `<ACCOUNT_ID>_<REGION>_flat.csv`
 (named `master-findings.csv` in older versions of this toolkit)
 
 One flat table, one row per finding, with columns:
@@ -143,7 +153,7 @@ One flat table, one row per finding, with columns:
 Feeds from: Security Hub, Config, Inspector, GuardDuty, Access Analyzer,
 Detective (Investigations), Macie, CloudTrail health.
 
-### `<ACCOUNT_ID>_audit.xlsx`
+### `<ACCOUNT_ID>_<REGION>_audit.xlsx`
 (named `aws-audit.xlsx` in older versions of this toolkit)
 
 One tab per service — `SecurityHub`, `Config`, `Inspector`, `GuardDuty`,
@@ -167,7 +177,7 @@ are also added to the flat CSV as `CRITICAL` (not logging) or `HIGH`
 (degraded delivery/notification/bucket access) findings, and rolled into a
 "CloudTrail Issues" tile on the dashboard.
 
-### `<ACCOUNT_ID>_dashboard.html`
+### `<ACCOUNT_ID>_<REGION>_dashboard.html`
 (named `leadership-dashboard.html` in older versions of this toolkit)
 
 A single self-contained page (no server, no internet needed to view it):
@@ -223,7 +233,7 @@ quotes," or inserts a stray line break into a long line. Fix: download the
 
 **`FileNotFoundError` when running `workbook.py`/`dashboard.py`** — you
 pointed the script at the wrong thing. It needs the **folder** `audit.sh`
-created (e.g. `aws-audit-123456789012-us-gov-west-1-20260824-171203`), not
+created (e.g. `aws-audit-123456789012-US-Gov-West-20260824-171203`), not
 the `.xlsx` file and not a duplicate-download name like `123456789012_audit
 (2).xlsx`. Run `ls -d aws-audit-*` to find the real folder name.
 
