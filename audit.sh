@@ -30,6 +30,19 @@ else
   done
 fi
 
+# ---------- Friendly region label used in output file/folder names ----------
+# (REGION itself stays the raw AWS region code — every --region flag below
+# needs that; REGION_LABEL is only for naming things for humans.)
+case "$REGION" in
+  us-gov-west-1) REGION_LABEL="US-Gov-West" ;;
+  us-gov-east-1) REGION_LABEL="US-Gov-East" ;;
+  us-east-1)     REGION_LABEL="US-East-1" ;;
+  us-east-2)     REGION_LABEL="US-East-2" ;;
+  us-west-1)     REGION_LABEL="US-West-1" ;;
+  us-west-2)     REGION_LABEL="US-West-2" ;;
+  *)             REGION_LABEL="$REGION" ;;
+esac
+
 # ---------- Identify the account so multi-account output is easy to sort ----------
 ACCOUNT_ID=$(aws sts get-caller-identity --region $REGION --output text --query 'Account' 2>/dev/null)
 if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
@@ -39,12 +52,12 @@ if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
 fi
 
 STAMP=$(date +%Y%m%d-%H%M%S)
-OUTDIR="aws-audit-${ACCOUNT_ID}-${REGION}-${STAMP}"
+OUTDIR="aws-audit-${ACCOUNT_ID}-${REGION_LABEL}-${STAMP}"
 mkdir -p "$OUTDIR"
 
 echo ""
 echo "AWS Account: $ACCOUNT_ID"
-echo "Running audit against region: $REGION"
+echo "Running audit against region: $REGION ($REGION_LABEL)"
 if [[ "$REGION" == us-gov-* ]]; then
   echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
 else
@@ -314,7 +327,7 @@ if [ ! -s "$OUTDIR/org-scps.json" ]; then
 fi
 
 # ---------- Master findings CSV ----------
-MASTER_CSV="$OUTDIR/${ACCOUNT_ID}_flat.csv"
+MASTER_CSV="$OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_flat.csv"
 echo "Source,Severity,ResourceId,ResourceType,Title,Description,Status,Region,Timestamp" > "$MASTER_CSV"
 
 jq -r '.Findings[]? | [
@@ -406,7 +419,7 @@ echo "IAM credential report CSV: $OUTDIR/iam-credential-report.csv"
 if [ -f "$REPO_DIR/workbook.py" ]; then
   echo ""
   echo "Building Excel workbook..."
-  python3 "$REPO_DIR/workbook.py" "$OUTDIR" "$ACCOUNT_ID"
+  python3 "$REPO_DIR/workbook.py" "$OUTDIR" "$ACCOUNT_ID" "$REGION_LABEL"
 else
   echo "workbook.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping .xlsx build."
 fi
@@ -414,7 +427,7 @@ fi
 if [ -f "$REPO_DIR/dashboard.py" ]; then
   echo ""
   echo "Building leadership dashboard..."
-  python3 "$REPO_DIR/dashboard.py" "$OUTDIR" "$ACCOUNT_ID"
+  python3 "$REPO_DIR/dashboard.py" "$OUTDIR" "$ACCOUNT_ID" "$REGION_LABEL"
 else
   echo "dashboard.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping HTML dashboard build."
 fi
@@ -425,7 +438,7 @@ echo "All done. Account $ACCOUNT_ID — deliverables in: $OUTDIR"
 echo ""
 FULL_OUTDIR="$(cd "$OUTDIR" && pwd)"
 echo "Full paths (use these with CloudShell Actions -> Download file):"
-[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_flat.csv" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_flat.csv"
-[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_audit.xlsx" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_audit.xlsx"
-[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_dashboard.html" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_dashboard.html"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_flat.csv" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_flat.csv"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_audit.xlsx" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_audit.xlsx"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_dashboard.html" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_${REGION_LABEL}_dashboard.html"
 echo "=================================================="
