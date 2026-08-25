@@ -30,11 +30,20 @@ else
   done
 fi
 
+# ---------- Identify the account so multi-account output is easy to sort ----------
+ACCOUNT_ID=$(aws sts get-caller-identity --region $REGION --output text --query 'Account' 2>/dev/null)
+if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+  echo "WARNING: could not determine the AWS account number via 'aws sts get-caller-identity'."
+  echo "         Falling back to 'UNKNOWN-ACCOUNT' in output file/folder names — check your credentials."
+  ACCOUNT_ID="UNKNOWN-ACCOUNT"
+fi
+
 STAMP=$(date +%Y%m%d-%H%M%S)
-OUTDIR="aws-audit-${REGION}-${STAMP}"
+OUTDIR="aws-audit-${ACCOUNT_ID}-${REGION}-${STAMP}"
 mkdir -p "$OUTDIR"
 
 echo ""
+echo "AWS Account: $ACCOUNT_ID"
 echo "Running audit against region: $REGION"
 if [[ "$REGION" == us-gov-* ]]; then
   echo "Note: AWS Organizations always routes to us-gov-west-1 internally regardless of this setting."
@@ -305,7 +314,7 @@ if [ ! -s "$OUTDIR/org-scps.json" ]; then
 fi
 
 # ---------- Master findings CSV ----------
-MASTER_CSV="$OUTDIR/master-findings.csv"
+MASTER_CSV="$OUTDIR/${ACCOUNT_ID}_flat.csv"
 echo "Source,Severity,ResourceId,ResourceType,Title,Description,Status,Region,Timestamp" > "$MASTER_CSV"
 
 jq -r '.Findings[]? | [
@@ -397,7 +406,7 @@ echo "IAM credential report CSV: $OUTDIR/iam-credential-report.csv"
 if [ -f "$REPO_DIR/workbook.py" ]; then
   echo ""
   echo "Building Excel workbook..."
-  python3 "$REPO_DIR/workbook.py" "$OUTDIR"
+  python3 "$REPO_DIR/workbook.py" "$OUTDIR" "$ACCOUNT_ID"
 else
   echo "workbook.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping .xlsx build."
 fi
@@ -405,18 +414,18 @@ fi
 if [ -f "$REPO_DIR/dashboard.py" ]; then
   echo ""
   echo "Building leadership dashboard..."
-  python3 "$REPO_DIR/dashboard.py" "$OUTDIR"
+  python3 "$REPO_DIR/dashboard.py" "$OUTDIR" "$ACCOUNT_ID"
 else
   echo "dashboard.py not found (checked $SCRIPT_DIR and $REPO_DIR) — skipping HTML dashboard build."
 fi
 
 echo ""
 echo "=================================================="
-echo "All done. Deliverables in: $OUTDIR"
+echo "All done. Account $ACCOUNT_ID — deliverables in: $OUTDIR"
 echo ""
 FULL_OUTDIR="$(cd "$OUTDIR" && pwd)"
 echo "Full paths (use these with CloudShell Actions -> Download file):"
-[ -f "$FULL_OUTDIR/master-findings.csv" ] && echo "  $FULL_OUTDIR/master-findings.csv"
-[ -f "$FULL_OUTDIR/aws-audit.xlsx" ] && echo "  $FULL_OUTDIR/aws-audit.xlsx"
-[ -f "$FULL_OUTDIR/leadership-dashboard.html" ] && echo "  $FULL_OUTDIR/leadership-dashboard.html"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_flat.csv" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_flat.csv"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_audit.xlsx" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_audit.xlsx"
+[ -f "$FULL_OUTDIR/${ACCOUNT_ID}_dashboard.html" ] && echo "  $FULL_OUTDIR/${ACCOUNT_ID}_dashboard.html"
 echo "=================================================="

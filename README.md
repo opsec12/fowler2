@@ -5,9 +5,9 @@ account, and turn it into a spreadsheet and a visual dashboard for review.
 
 | File | What it does | Where it runs | Needs AWS access? |
 |---|---|---|---|
-| `audit.sh` | Pulls findings/inventory from AWS via the CLI, writes raw JSON + `master-findings.csv` | AWS CloudShell (or anywhere with AWS CLI + credentials) | Yes |
-| `workbook.py` | Turns that JSON/CSV into a tabbed `aws-audit.xlsx` | Anywhere with Python 3 (CloudShell or your desktop) | No |
-| `dashboard.py` | Turns that JSON/CSV into a single-file `leadership-dashboard.html` | Anywhere with Python 3 (CloudShell or your desktop) | No |
+| `audit.sh` | Pulls findings/inventory from AWS via the CLI, writes raw JSON + `<ACCOUNT_ID>_flat.csv` | AWS CloudShell (or anywhere with AWS CLI + credentials) | Yes |
+| `workbook.py` | Turns that JSON/CSV into a tabbed `<ACCOUNT_ID>_audit.xlsx` | Anywhere with Python 3 (CloudShell or your desktop) | No |
+| `dashboard.py` | Turns that JSON/CSV into a single-file `<ACCOUNT_ID>_dashboard.html` | Anywhere with Python 3 (CloudShell or your desktop) | No |
 
 `audit.sh` automatically runs `workbook.py` and `dashboard.py` for you at the
 end — see **Quick start** below. You only need to run them separately if
@@ -59,30 +59,45 @@ Setup below.
 ./audit.sh
 ```
 
-This pulls all AWS data into a new timestamped folder (e.g.
-`aws-audit-20260824-171203/`), builds `master-findings.csv`, then
-automatically calls `workbook.py` and `dashboard.py` against that same
-folder. At the end it prints something like:
+This pulls all AWS data into a new folder named after the **account and
+region it just audited** (e.g. `aws-audit-123456789012-us-gov-west-1-20260824-171203/`
+— `audit.sh` looks up the account number itself via `aws sts
+get-caller-identity`, you don't need to know it ahead of time), builds the
+flat findings CSV, then automatically calls `workbook.py` and
+`dashboard.py` against that same folder. At the end it prints something
+like:
 
 ```
 ==================================================
-All done. Deliverables in: aws-audit-20260824-171203
+All done. Account 123456789012 — deliverables in: aws-audit-123456789012-us-gov-west-1-20260824-171203
 
 Full paths (use these with CloudShell Actions -> Download file):
-  /home/cloudshell-user/aws-audit-20260824-171203/master-findings.csv
-  /home/cloudshell-user/aws-audit-20260824-171203/aws-audit.xlsx
-  /home/cloudshell-user/aws-audit-20260824-171203/leadership-dashboard.html
+  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_flat.csv
+  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_audit.xlsx
+  /home/cloudshell-user/aws-audit-123456789012-us-gov-west-1-20260824-171203/123456789012_dashboard.html
 ==================================================
 ```
 
 Every run creates a **new** timestamped folder — nothing gets overwritten,
-so you can re-run this on a schedule and keep a history.
+so you can re-run this on a schedule and keep a history. **If you're
+auditing many accounts**, this naming is what makes sorting them
+manageable: every deliverable is prefixed with the account number it came
+from, so you can drop all of them into one shared folder (Downloads,
+S3, a network share) and still tell them apart — `123456789012_flat.csv`,
+`123456789012_audit.xlsx`, `123456789012_dashboard.html`, one triplet per
+account, sorting naturally by account number.
+
+If `audit.sh` can't determine the account number (e.g. the credentials
+don't have `sts:GetCallerIdentity`), it falls back to `UNKNOWN-ACCOUNT` in
+the folder and file names and prints a warning — worth fixing your
+credentials rather than working around this, since account attribution is
+the whole point of the naming scheme.
 
 ### Downloading the results from CloudShell
 
 CloudShell has no GUI file browser, so use its **Actions menu → Download
-file**, and paste in one of the full paths printed above. Do this for
-`aws-audit.xlsx` and `leadership-dashboard.html` — those are the two you'll
+file**, and paste in one of the full paths printed above. Do this for the
+`_audit.xlsx` and `_dashboard.html` files — those are the two you'll
 actually want to open in a browser/Excel.
 
 ---
@@ -94,15 +109,22 @@ workbook or dashboard — both read from an existing output folder.
 
 **Rebuild just the Excel workbook:**
 ```bash
-python3 workbook.py aws-audit-20260824-171203
+python3 workbook.py aws-audit-123456789012-us-gov-west-1-20260824-171203 123456789012
 ```
 
 **Rebuild just the HTML dashboard:**
 ```bash
-python3 dashboard.py aws-audit-20260824-171203
+python3 dashboard.py aws-audit-123456789012-us-gov-west-1-20260824-171203 123456789012
 ```
 
-(swap in your actual folder name — check with `ls -d aws-audit-*`)
+(swap in your actual folder name and account number — check with `ls -d
+aws-audit-*`). The trailing account number is optional for both scripts —
+without it, `workbook.py` names its output `aws-audit.xlsx` and
+`dashboard.py` falls back to looking for any `*_flat.csv` file in the
+folder (or the legacy `master-findings.csv` name from older versions of
+`audit.sh`) and names its output `leadership-dashboard.html`. Passing the
+account number is what gives you the account-prefixed filenames described
+above.
 
 Both scripts print a clear error and exit if you point them at something
 that isn't a real folder from `audit.sh` (e.g. accidentally pointing at the
@@ -112,14 +134,18 @@ that isn't a real folder from `audit.sh` (e.g. accidentally pointing at the
 
 ## What's inside each output
 
-### `master-findings.csv`
+### `<ACCOUNT_ID>_flat.csv`
+(named `master-findings.csv` in older versions of this toolkit)
+
 One flat table, one row per finding, with columns:
 `Source, Severity, ResourceId, ResourceType, Title, Description, Status, Region, Timestamp`
 
 Feeds from: Security Hub, Config, Inspector, GuardDuty, Access Analyzer,
-Detective (Investigations), Macie.
+Detective (Investigations), Macie, CloudTrail health.
 
-### `aws-audit.xlsx`
+### `<ACCOUNT_ID>_audit.xlsx`
+(named `aws-audit.xlsx` in older versions of this toolkit)
+
 One tab per service — `SecurityHub`, `Config`, `Inspector`, `GuardDuty`,
 `AccessAnalyzer`, `Detective`, `Macie`, `SSM_PatchStates`,
 `EC2_SSM_Coverage`, `SecurityGroups`, `FlowLogs`, `ACM_Certificates`,
@@ -137,11 +163,13 @@ CloudTrail's own service-linked delivery can reach it), `LogFileValidationEnable
 `LatestCloudWatchLogsDeliveryError`, `LatestDigestDeliveryError`,
 `StartLoggingTime`, `StopLoggingTime`. Trails with `IsLogging: false` or any
 non-`"None"` error field, or a `BucketReachableByAuditor` other than `"OK"`,
-are also added to `master-findings.csv` as `CRITICAL` (not logging) or
-`HIGH` (degraded delivery/notification/bucket access) findings, and rolled
-into a "CloudTrail Issues" tile on the dashboard.
+are also added to the flat CSV as `CRITICAL` (not logging) or `HIGH`
+(degraded delivery/notification/bucket access) findings, and rolled into a
+"CloudTrail Issues" tile on the dashboard.
 
-### `leadership-dashboard.html`
+### `<ACCOUNT_ID>_dashboard.html`
+(named `leadership-dashboard.html` in older versions of this toolkit)
+
 A single self-contained page (no server, no internet needed to view it):
 KPI tiles (total findings, Critical, High, plus SSM coverage / open security
 groups / expiring certs / CloudTrail issues if available), a
@@ -195,9 +223,16 @@ quotes," or inserts a stray line break into a long line. Fix: download the
 
 **`FileNotFoundError` when running `workbook.py`/`dashboard.py`** — you
 pointed the script at the wrong thing. It needs the **folder** `audit.sh`
-created (e.g. `aws-audit-20260824-171203`), not the `.xlsx` file and not a
-duplicate-download name like `aws-audit (2).xlsx`. Run `ls -d aws-audit-*`
-to find the real folder name.
+created (e.g. `aws-audit-123456789012-us-gov-west-1-20260824-171203`), not
+the `.xlsx` file and not a duplicate-download name like `123456789012_audit
+(2).xlsx`. Run `ls -d aws-audit-*` to find the real folder name.
+
+**`aws-audit-UNKNOWN-ACCOUNT-...` folder/file names** — `audit.sh` couldn't
+determine your AWS account number via `aws sts get-caller-identity`, most
+likely because the credentials in use don't have `sts:GetCallerIdentity`
+permission (rare — almost every identity has this by default) or STS isn't
+reachable in that region. Check `aws sts get-caller-identity` runs cleanly
+on its own before re-running `audit.sh`.
 
 **Terminal looks "frozen" with a `>>>` prompt** — you ran `python3` (or
 `python`) with no script name, which opens the interactive Python shell.

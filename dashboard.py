@@ -1,18 +1,23 @@
 # dashboard.py
-# Usage: python3 dashboard.py <OUTDIR>
-# Reads master-findings.csv (+ a few optional JSON files, if present) from
-# OUTDIR and writes OUTDIR/leadership-dashboard.html — one self-contained
+# Usage: python3 dashboard.py <OUTDIR> [ACCOUNT_ID]
+# Reads the flat findings CSV (+ a few optional JSON files, if present) from
+# OUTDIR and writes OUTDIR/<ACCOUNT_ID>_dashboard.html — one self-contained
 # file, no dependencies, no internet required. Open it in any browser.
+# ACCOUNT_ID (optional) names the output "<ACCOUNT_ID>_dashboard.html" and
+# is used to locate "<ACCOUNT_ID>_flat.csv" — useful when auditing many
+# accounts and sorting the results later. audit.sh always passes it
+# automatically.
 
 import csv, json, os, sys, datetime
 from collections import defaultdict, Counter
 
 outdir = sys.argv[1]
+account_id = sys.argv[2] if len(sys.argv) > 2 else None
 
 if not os.path.isdir(outdir):
     print("Error: '{}' is not a folder.".format(outdir))
-    print("Point this script at the aws-audit-<timestamp> FOLDER produced by audit.sh")
-    print("(the one containing master-findings.csv) — not the aws-audit.xlsx file.")
+    print("Point this script at the aws-audit-<account>-<region>-<timestamp> FOLDER")
+    print("produced by audit.sh (the one containing the *_flat.csv file) — not the .xlsx file.")
     sys.exit(1)
 
 def read_csv(fname):
@@ -32,7 +37,20 @@ def read_json(fname):
         except json.JSONDecodeError:
             return None
 
-findings = read_csv("master-findings.csv")
+def find_findings_csv():
+    # Preferred: "<ACCOUNT_ID>_flat.csv" if we know the account id.
+    if account_id:
+        candidate = "{}_flat.csv".format(account_id)
+        if os.path.exists(os.path.join(outdir, candidate)):
+            return candidate
+    # Fallback: any "*_flat.csv" sitting in the folder.
+    for fname in sorted(os.listdir(outdir)):
+        if fname.endswith("_flat.csv"):
+            return fname
+    # Legacy fallback: older audit.sh versions wrote "master-findings.csv".
+    return "master-findings.csv"
+
+findings = read_csv(find_findings_csv())
 
 def norm_sev(raw):
     s = (raw or "").strip().upper()
@@ -398,12 +416,12 @@ html_out = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>AWS Security Audit — Leadership Summary</title>
+<title>AWS Security Audit — {account_title}</title>
 <style>{css}</style>
 </head>
 <body>
 <div class="viz-root">
-  <h1>AWS Security Audit — Leadership Summary</h1>
+  <h1>AWS Security Audit — Leadership Summary{account_heading}</h1>
   <div class="subtitle">Generated {generated} · {total} active findings across {nsources} services</div>
 
   <div class="kpi-row">{kpis}</div>
@@ -438,6 +456,8 @@ html_out = """<!doctype html>
 </body>
 </html>""".format(
     css=CSS,
+    account_title=(esc(account_id) if account_id else "Leadership Summary"),
+    account_heading=(" — Account {}".format(esc(account_id)) if account_id else ""),
     generated=generated,
     total=total_findings,
     nsources=len(source_order),
@@ -449,7 +469,8 @@ html_out = """<!doctype html>
     script=SCRIPT,
 )
 
-out_path = os.path.join(outdir, "leadership-dashboard.html")
+html_name = "{}_dashboard.html".format(account_id) if account_id else "leadership-dashboard.html"
+out_path = os.path.join(outdir, html_name)
 with open(out_path, "w", encoding="utf-8") as f:
     f.write(html_out)
 print("Dashboard saved: " + out_path)
