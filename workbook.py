@@ -1,14 +1,16 @@
 # workbook.py
-# Usage: python3 workbook.py <OUTDIR> [ACCOUNT_ID]
+# Usage: python3 workbook.py <OUTDIR> [ACCOUNT_ID] [REGION_LABEL]
 # No external dependencies — builds .xlsx by hand using stdlib only.
-# ACCOUNT_ID (optional) names the output "<ACCOUNT_ID>_audit.xlsx" instead of
-# "aws-audit.xlsx" — useful when auditing many accounts and sorting the
-# results later. audit.sh always passes it automatically.
+# ACCOUNT_ID + REGION_LABEL (both optional) name the output
+# "<ACCOUNT_ID>_<REGION_LABEL>_audit.xlsx" instead of "aws-audit.xlsx" —
+# useful when auditing many accounts/regions and sorting the results later.
+# audit.sh always passes both automatically.
 import json, sys, os, base64, csv, io, zipfile, re
 from xml.sax.saxutils import escape
 
 outdir = sys.argv[1]
 account_id = sys.argv[2] if len(sys.argv) > 2 else None
+region_label = sys.argv[3] if len(sys.argv) > 3 else None
 sheets = []  # list of (name, headers, rows)
 
 def load(fname):
@@ -443,7 +445,8 @@ def save_workbook(path, sheets):
         for i, (name, headers, rows) in enumerate(sheets):
             z.writestr(f"xl/worksheets/sheet{i+1}.xml", _sheet_xml(headers, rows))
 
-xlsx_name = "{}_audit.xlsx".format(account_id) if account_id else "aws-audit.xlsx"
+name_parts = [p for p in (account_id, region_label) if p]
+xlsx_name = "{}_audit.xlsx".format("_".join(name_parts)) if name_parts else "aws-audit.xlsx"
 out_path = os.path.join(outdir, xlsx_name)
 save_workbook(out_path, sheets)
 print(f"Workbook saved: {out_path}")
