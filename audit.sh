@@ -1,7 +1,6 @@
 #!/bin/bash
 # AWS GovCloud Audit Data Pull + Master CSV + Workbook + Dashboard — run from CloudShell in us-gov-west-1
 # One-shot: pulls all AWS data, builds master-findings.csv, aws-audit.xlsx, and leadership-dashboard.html.
-
 # Pass a region as the first argument to skip the prompt, e.g.:
 #   ./audit.sh us-gov-east-1
 if [ -n "$1" ]; then
