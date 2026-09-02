@@ -7,7 +7,6 @@
 # used to locate "<ACCOUNT_ID>_<REGION_LABEL>_flat.csv" — useful when
 # auditing many accounts/regions and sorting the results later. audit.sh
 # always passes both automatically.
-
 import csv, json, os, sys, datetime
 from collections import defaultdict, Counter
 
